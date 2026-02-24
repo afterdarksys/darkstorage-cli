@@ -201,52 +201,16 @@ Examples:
 			os.Exit(1)
 		}
 
+		ctx := context.Background()
+
 		if info.IsDir() {
-			// TODO: Implement recursive directory upload
-			color.Yellow("Recursive upload not yet implemented")
-			os.Exit(1)
+			// Recursive directory upload
+			uploadDir(ctx, source, dest, storageBackend)
+			return
 		}
 
 		// Upload single file
-		ctx := context.Background()
-
-		file, err := os.Open(source)
-		if err != nil {
-			color.Red("Error opening file: %v", err)
-			os.Exit(1)
-		}
-		defer file.Close()
-
-		// Ensure destination has proper format (bucket/path)
-		if !strings.Contains(dest, "/") {
-			dest = dest + "/" + filepath.Base(source)
-		} else if strings.HasSuffix(dest, "/") {
-			dest = dest + filepath.Base(source)
-		}
-
-		// Progress bar
-		bar := progressbar.DefaultBytes(
-			info.Size(),
-			"Uploading",
-		)
-
-		opts := &storage.UploadOptions{
-			ProgressFunc: func(bytes int64) {
-				bar.Set64(bytes)
-			},
-		}
-
-		result, err := storageBackend.Upload(ctx, file, dest, opts)
-		if err != nil {
-			fmt.Println() // New line after progress bar
-			color.Red("Error uploading file: %v", err)
-			os.Exit(1)
-		}
-
-		fmt.Println() // New line after progress bar
-		color.Green("✓ Upload complete: %s (%s)", filepath.Base(source), humanize.Bytes(uint64(result.Size)))
-		fmt.Printf("  Location: %s\n", dest)
-		fmt.Printf("  ETag: %s\n", result.ETag)
+		uploadFile(ctx, source, dest, info.Size(), storageBackend)
 	},
 }
 
@@ -272,7 +236,15 @@ Examples:
 			dest = args[1]
 		}
 
+		recursive, _ := cmd.Flags().GetBool("recursive")
 		ctx := context.Background()
+
+		// Check if recursive download is requested
+		if recursive || strings.HasSuffix(source, "/") {
+			// Recursive directory download
+			downloadDir(ctx, source, dest, storageBackend)
+			return
+		}
 
 		// Get file info first
 		stat, err := storageBackend.Stat(ctx, source)
@@ -281,42 +253,8 @@ Examples:
 			os.Exit(1)
 		}
 
-		// Determine output filename
-		outputPath := dest
-		if info, err := os.Stat(dest); err == nil && info.IsDir() {
-			outputPath = filepath.Join(dest, filepath.Base(source))
-		}
-
-		// Create output file
-		outFile, err := os.Create(outputPath)
-		if err != nil {
-			color.Red("Error creating file: %v", err)
-			os.Exit(1)
-		}
-		defer outFile.Close()
-
-		// Progress bar
-		bar := progressbar.DefaultBytes(
-			stat.Size,
-			"Downloading",
-		)
-
-		opts := &storage.DownloadOptions{
-			ProgressFunc: func(bytes int64) {
-				bar.Set64(bytes)
-			},
-		}
-
-		result, err := storageBackend.Download(ctx, source, outFile, opts)
-		if err != nil {
-			fmt.Println() // New line after progress bar
-			color.Red("Error downloading file: %v", err)
-			os.Exit(1)
-		}
-
-		fmt.Println() // New line after progress bar
-		color.Green("✓ Download complete: %s (%s)", filepath.Base(outputPath), humanize.Bytes(uint64(result.Size)))
-		fmt.Printf("  Saved to: %s\n", outputPath)
+		// Download single file
+		downloadFile(ctx, source, dest, stat.Size, storageBackend)
 	},
 }
 
@@ -360,13 +298,14 @@ Examples:
 			return
 		}
 
-		// Delete file
-		if recursive {
-			// TODO: Implement recursive delete
-			color.Yellow("Recursive delete not yet implemented")
-			os.Exit(1)
+		// Delete file(s)
+		if recursive || strings.HasSuffix(path, "/") {
+			// Recursive delete
+			deleteDir(ctx, path, storageBackend)
+			return
 		}
 
+		// Delete single file
 		if err := storageBackend.Delete(ctx, path); err != nil {
 			color.Red("Error deleting file: %v", err)
 			os.Exit(1)
@@ -449,6 +388,226 @@ var catCmd = &cobra.Command{
 
 		_ = result
 	},
+}
+
+// Helper functions for recursive operations
+
+// uploadFile uploads a single file with progress bar
+func uploadFile(ctx context.Context, source, dest string, size int64, backend storage.StorageBackend) {
+	file, err := os.Open(source)
+	if err != nil {
+		color.Red("Error opening file: %v", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	// Ensure destination has proper format (bucket/path)
+	if !strings.Contains(dest, "/") {
+		dest = dest + "/" + filepath.Base(source)
+	} else if strings.HasSuffix(dest, "/") {
+		dest = dest + filepath.Base(source)
+	}
+
+	// Progress bar
+	bar := progressbar.DefaultBytes(size, "Uploading "+filepath.Base(source))
+
+	opts := &storage.UploadOptions{
+		ProgressFunc: func(bytes int64) {
+			bar.Set64(bytes)
+		},
+	}
+
+	result, err := backend.Upload(ctx, file, dest, opts)
+	if err != nil {
+		fmt.Println()
+		color.Red("Error uploading %s: %v", filepath.Base(source), err)
+		os.Exit(1)
+	}
+
+	fmt.Println()
+	color.Green("✓ Upload complete: %s (%s)", filepath.Base(source), humanize.Bytes(uint64(result.Size)))
+	fmt.Printf("  Location: %s\n", dest)
+}
+
+// uploadDir recursively uploads a directory
+func uploadDir(ctx context.Context, source, dest string, backend storage.StorageBackend) {
+	// Ensure dest ends with /
+	if !strings.HasSuffix(dest, "/") {
+		dest = dest + "/"
+	}
+
+	// Add base directory name to destination
+	dest = dest + filepath.Base(source) + "/"
+
+	var totalFiles int
+	var totalSize int64
+
+	// Walk the directory
+	err := filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories
+		if info.IsDir() {
+			return nil
+		}
+
+		// Calculate relative path
+		relPath, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+
+		// Build remote path
+		remotePath := dest + strings.ReplaceAll(relPath, "\\", "/")
+
+		// Upload file
+		uploadFile(ctx, path, remotePath, info.Size(), backend)
+
+		totalFiles++
+		totalSize += info.Size()
+
+		return nil
+	})
+
+	if err != nil {
+		color.Red("Error walking directory: %v", err)
+		os.Exit(1)
+	}
+
+	fmt.Println()
+	color.Green("✓ Directory upload complete!")
+	fmt.Printf("  Files uploaded: %d\n", totalFiles)
+	fmt.Printf("  Total size: %s\n", humanize.Bytes(uint64(totalSize)))
+}
+
+// downloadFile downloads a single file with progress bar
+func downloadFile(ctx context.Context, source, dest string, size int64, backend storage.StorageBackend) {
+	// Determine output filename
+	outputPath := dest
+	if info, err := os.Stat(dest); err == nil && info.IsDir() {
+		outputPath = filepath.Join(dest, filepath.Base(source))
+	}
+
+	// Create output directory if needed
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		color.Red("Error creating directory: %v", err)
+		os.Exit(1)
+	}
+
+	// Create output file
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		color.Red("Error creating file: %v", err)
+		os.Exit(1)
+	}
+	defer outFile.Close()
+
+	// Progress bar
+	bar := progressbar.DefaultBytes(size, "Downloading "+filepath.Base(source))
+
+	opts := &storage.DownloadOptions{
+		ProgressFunc: func(bytes int64) {
+			bar.Set64(bytes)
+		},
+	}
+
+	result, err := backend.Download(ctx, source, outFile, opts)
+	if err != nil {
+		fmt.Println()
+		color.Red("Error downloading %s: %v", filepath.Base(source), err)
+		os.Exit(1)
+	}
+
+	fmt.Println()
+	color.Green("✓ Download complete: %s (%s)", filepath.Base(outputPath), humanize.Bytes(uint64(result.Size)))
+	fmt.Printf("  Saved to: %s\n", outputPath)
+}
+
+// downloadDir recursively downloads a directory
+func downloadDir(ctx context.Context, source, dest string, backend storage.StorageBackend) {
+	// List all files recursively
+	opts := &storage.ListOptions{
+		Recursive: true,
+	}
+
+	files, err := backend.List(ctx, source, opts)
+	if err != nil {
+		color.Red("Error listing files: %v", err)
+		os.Exit(1)
+	}
+
+	if len(files) == 0 {
+		color.Yellow("No files found in %s", source)
+		return
+	}
+
+	var totalFiles int
+	var totalSize int64
+
+	// Download each file
+	for _, file := range files {
+		if file.IsDir {
+			continue
+		}
+
+		// Calculate local path
+		relPath := strings.TrimPrefix(file.Path, source)
+		relPath = strings.TrimPrefix(relPath, "/")
+		localPath := filepath.Join(dest, relPath)
+
+		// Download file
+		downloadFile(ctx, file.Path, localPath, file.Size, backend)
+
+		totalFiles++
+		totalSize += file.Size
+	}
+
+	fmt.Println()
+	color.Green("✓ Directory download complete!")
+	fmt.Printf("  Files downloaded: %d\n", totalFiles)
+	fmt.Printf("  Total size: %s\n", humanize.Bytes(uint64(totalSize)))
+}
+
+// deleteDir recursively deletes a directory
+func deleteDir(ctx context.Context, path string, backend storage.StorageBackend) {
+	// List all files recursively
+	opts := &storage.ListOptions{
+		Recursive: true,
+	}
+
+	files, err := backend.List(ctx, path, opts)
+	if err != nil {
+		color.Red("Error listing files: %v", err)
+		os.Exit(1)
+	}
+
+	if len(files) == 0 {
+		color.Yellow("No files found in %s", path)
+		return
+	}
+
+	var totalFiles int
+
+	// Delete each file
+	for _, file := range files {
+		if file.IsDir {
+			continue
+		}
+
+		if err := backend.Delete(ctx, file.Path); err != nil {
+			color.Red("Error deleting %s: %v", file.Path, err)
+			os.Exit(1)
+		}
+
+		color.Green("✓ Deleted: %s", file.Path)
+		totalFiles++
+	}
+
+	fmt.Println()
+	color.Green("✓ Directory delete complete!")
+	fmt.Printf("  Files deleted: %d\n", totalFiles)
 }
 
 func init() {

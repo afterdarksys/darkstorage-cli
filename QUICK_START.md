@@ -128,21 +128,30 @@ storage:
 
 ## What Works vs What's Coming
 
-### ✅ Working Now (v0.1 - Local Testing)
+### ✅ Working Now (v0.2 - Local Testing)
 - MinIO backend integration
 - List buckets
 - Create/delete buckets
 - Upload files (with progress bar)
 - Download files (with progress bar)
+- **Recursive directory upload** 🆕
+- **Recursive directory download** 🆕
+- **Recursive directory delete** 🆕
 - Copy files
 - Move files
 - Delete files
 - Cat (view) files
 - Beautiful CLI output with colors
 
-### 🚧 Coming Next (v0.2 - Core Features)
+### ✅ New in v0.2 - Recursive Operations
+- ✅ Recursive directory upload
+- ✅ Recursive directory download
+- ✅ Recursive directory delete
+- Progress tracking for each file
+- Maintains directory structure
+
+### 🚧 Coming Next (v0.3 - Advanced Features)
 - Encryption (3+1 key system)
-- Recursive upload/download
 - Storage classes (STANDARD, GLACIER, etc.)
 - Pre-signed URLs (sharing)
 - File versioning
@@ -156,6 +165,26 @@ storage:
 - Disaster Mail
 - HSM encryption
 - Everything from the master vision!
+
+---
+
+## Recursive Operations Examples
+
+```bash
+# Upload an entire directory
+mkdir -p myfiles/subfolder
+echo "File 1" > myfiles/file1.txt
+echo "File 2" > myfiles/file2.txt
+echo "Nested" > myfiles/subfolder/nested.txt
+
+./darkstorage put myfiles/ test-bucket/ -r
+
+# Download an entire directory
+./darkstorage get test-bucket/myfiles/ ./downloaded/ -r
+
+# Delete an entire directory
+./darkstorage rm test-bucket/myfiles/ -r
+```
 
 ---
 
