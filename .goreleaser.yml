@@ -1,0 +1,208 @@
+# GoReleaser Configuration
+# Automates building, packaging, and releasing Dark Storage CLI
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+
+builds:
+  - id: darkstorage
+    main: ./main.go
+    binary: darkstorage
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Skip specific combinations if needed
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/darkstorage/cli/cmd.Version={{.Version}}
+      - -X github.com/darkstorage/cli/cmd.Commit={{.Commit}}
+      - -X github.com/darkstorage/cli/cmd.Date={{.Date}}
+      - -X github.com/darkstorage/cli/cmd.BuiltBy=goreleaser
+
+archives:
+  - id: darkstorage
+    format: tar.gz
+    name_template: "darkstorage_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - QUICK_START.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: "Bug fixes"
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: Others
+      order: 999
+
+# Homebrew tap
+brews:
+  - name: darkstorage
+    repository:
+      owner: afterdarksys
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    folder: Formula
+    homepage: https://darkstorage.io
+    description: "Dark Storage CLI - Secure, distributed cloud storage"
+    license: "MIT"
+    skip_upload: auto
+    test: |
+      system "#{bin}/darkstorage version"
+    install: |
+      bin.install "darkstorage"
+
+# Docker images
+dockers:
+  - image_templates:
+      - "darkstorage/cli:{{ .Version }}-amd64"
+      - "darkstorage/cli:latest-amd64"
+    use: buildx
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+    skip_push: auto
+
+  - image_templates:
+      - "darkstorage/cli:{{ .Version }}-arm64"
+      - "darkstorage/cli:latest-arm64"
+    use: buildx
+    goarch: arm64
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+    skip_push: auto
+
+docker_manifests:
+  - name_template: "darkstorage/cli:{{ .Version }}"
+    image_templates:
+      - "darkstorage/cli:{{ .Version }}-amd64"
+      - "darkstorage/cli:{{ .Version }}-arm64"
+    skip_push: auto
+
+  - name_template: "darkstorage/cli:latest"
+    image_templates:
+      - "darkstorage/cli:latest-amd64"
+      - "darkstorage/cli:latest-arm64"
+    skip_push: auto
+
+# Snapcraft (Linux)
+snapcrafts:
+  - name: darkstorage
+    summary: "Dark Storage CLI - Secure cloud storage"
+    description: |
+      Dark Storage is a secure, distributed cloud storage platform.
+      This CLI provides command-line access to your Dark Storage account.
+    publish: false
+    grade: stable
+    confinement: strict
+    license: MIT
+    base: core22
+    apps:
+      darkstorage:
+        command: darkstorage
+        plugs:
+          - home
+          - network
+          - network-bind
+
+# Scoop (Windows)
+scoop:
+  bucket:
+    owner: afterdarksys
+    name: scoop-bucket
+    token: "{{ .Env.SCOOP_GITHUB_TOKEN }}"
+  folder: bucket
+  homepage: https://darkstorage.io
+  description: "Dark Storage CLI - Secure, distributed cloud storage"
+  license: MIT
+  skip_upload: auto
+
+# Announce releases
+announce:
+  skip: true
+  # Can enable later for Discord, Slack, Twitter, etc.
+
+# Release notes
+release:
+  github:
+    owner: afterdarksys
+    name: darkstorage-cli
+  draft: false
+  prerelease: auto
+  mode: append
+  header: |
+    ## Dark Storage CLI {{ .Tag }} 🚀
+
+    {{ if .IsPrerelease }}
+    **This is a pre-release version.**
+    {{ end }}
+
+    ### Installation
+
+    #### macOS / Linux (Homebrew)
+    ```bash
+    brew install afterdarksys/tap/darkstorage
+    ```
+
+    #### Go Install
+    ```bash
+    go install github.com/darkstorage/cli@{{ .Tag }}
+    ```
+
+    #### Universal Installer
+    ```bash
+    curl -fsSL https://install.darkstorage.io | sh
+    ```
+
+    #### Manual Download
+    Download the binary for your platform below.
+
+  footer: |
+    ---
+    **Full Changelog**: https://github.com/afterdarksys/darkstorage-cli/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    🐱 Built with [GoReleaser](https://goreleaser.com)

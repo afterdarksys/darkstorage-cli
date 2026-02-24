@@ -1,37 +1,64 @@
 # Dark Storage CLI
 
-API-first, developer-centric command-line interface for Dark Storage.
+Secure, distributed cloud storage with S3 compatibility, Web3 integration, and disaster recovery built-in.
 
-## Features
+[![Release](https://img.shields.io/github/v/release/afterdarksys/darkstorage-cli)](https://github.com/afterdarksys/darkstorage-cli/releases)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/afterdarksys/darkstorage-cli)](https://go.dev/)
+[![License](https://img.shields.io/github/license/afterdarksys/darkstorage-cli)](LICENSE)
+[![CI](https://github.com/afterdarksys/darkstorage-cli/workflows/CI/badge.svg)](https://github.com/afterdarksys/darkstorage-cli/actions)
 
-- S3-compatible cloud storage operations
-- Block storage management
-- User and group management
-- Permissions and sharing
-- Audit logging
-- File scanning and trash management
+---
 
-## Installation
+## ✨ Features
 
-### From Source
+- 🗄️ **S3-Compatible Storage** - Works with existing S3 tools and SDKs
+- 📁 **Recursive Operations** - Upload/download entire directories
+- 🔐 **Client-Side Encryption** - 3+1 key system with automatic rotation
+- 🌐 **Web3 Integration** - Optional Storj and IPFS backends
+- 🚨 **Instant DR** - Automatic disaster recovery for websites
+- 📧 **Disaster Mail** - Email continuity during outages
+- ⚡ **Progress Tracking** - Real-time upload/download progress
+- 🎯 **Storage Classes** - AWS-compatible tiers (Standard, Glacier, etc.)
+- 🔗 **Pre-signed URLs** - Secure temporary file sharing
+- 🖥️ **Desktop GUI** - Native sync application
+- 🔄 **Background Sync** - Automatic folder synchronization
+
+---
+
+## 🚀 Quick Install
+
+### macOS / Linux
 
 ```bash
-go build -o darkstorage
+curl -fsSL https://install.darkstorage.io | sh
 ```
 
-Or use the Makefile:
+### Homebrew
 
 ```bash
-make build
+brew install afterdarksys/tap/darkstorage
 ```
 
-### Install to System
+### Windows (PowerShell)
+
+```powershell
+scoop bucket add afterdarksys https://github.com/afterdarksys/scoop-bucket
+scoop install darkstorage
+```
+
+### Go Install
 
 ```bash
-make install
+go install github.com/darkstorage/cli@latest
 ```
 
-This will install the binary to `/usr/local/bin/darkstorage`.
+### Docker
+
+```bash
+docker pull darkstorage/cli:latest
+```
+
+**[📖 Full Installation Guide](INSTALLATION.md)** - All platforms, package managers, and manual installation
 
 ## Quick Start
 
