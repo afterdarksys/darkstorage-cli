@@ -47,12 +47,104 @@ const (
 type StorageClass string
 
 const (
-	StorageStandard          StorageClass = "STANDARD"
-	StorageStandardIA        StorageClass = "STANDARD_IA"
-	StorageIntelligentTiering StorageClass = "INTELLIGENT_TIERING"
-	StorageGlacier           StorageClass = "GLACIER"
-	StorageDeepArchive       StorageClass = "DEEP_ARCHIVE"
+	StorageStandard          StorageClass = "STANDARD"           // Frequently accessed data
+	StorageStandardIA        StorageClass = "STANDARD_IA"        // Infrequently accessed
+	StorageIntelligentTiering StorageClass = "INTELLIGENT_TIERING" // Auto-tiering
+	StorageGlacier           StorageClass = "GLACIER"            // Archive (3-5 hour retrieval)
+	StorageGlacierInstant    StorageClass = "GLACIER_INSTANT"    // Archive (instant retrieval)
+	StorageDeepArchive       StorageClass = "DEEP_ARCHIVE"       // Long-term (12 hour retrieval)
 )
+
+// StorageClassInfo provides metadata about a storage class
+type StorageClassInfo struct {
+	Class           StorageClass
+	Name            string
+	Description     string
+	MinDuration     string // Minimum storage duration
+	RetrievalTime   string // Typical retrieval time
+	CostMultiplier  float64 // Relative cost (STANDARD = 1.0)
+}
+
+// GetStorageClassInfo returns metadata for a storage class
+func GetStorageClassInfo(class StorageClass) StorageClassInfo {
+	switch class {
+	case StorageStandard:
+		return StorageClassInfo{
+			Class:          StorageStandard,
+			Name:           "Standard",
+			Description:    "For frequently accessed data",
+			MinDuration:    "None",
+			RetrievalTime:  "Instant",
+			CostMultiplier: 1.0,
+		}
+	case StorageStandardIA:
+		return StorageClassInfo{
+			Class:          StorageStandardIA,
+			Name:           "Standard Infrequent Access",
+			Description:    "For infrequently accessed data",
+			MinDuration:    "30 days",
+			RetrievalTime:  "Instant",
+			CostMultiplier: 0.5,
+		}
+	case StorageIntelligentTiering:
+		return StorageClassInfo{
+			Class:          StorageIntelligentTiering,
+			Name:           "Intelligent Tiering",
+			Description:    "Automatically moves data between tiers",
+			MinDuration:    "None",
+			RetrievalTime:  "Instant",
+			CostMultiplier: 0.7,
+		}
+	case StorageGlacierInstant:
+		return StorageClassInfo{
+			Class:          StorageGlacierInstant,
+			Name:           "Glacier Instant Retrieval",
+			Description:    "Archive with instant retrieval",
+			MinDuration:    "90 days",
+			RetrievalTime:  "Instant",
+			CostMultiplier: 0.3,
+		}
+	case StorageGlacier:
+		return StorageClassInfo{
+			Class:          StorageGlacier,
+			Name:           "Glacier Flexible Retrieval",
+			Description:    "Archive with 3-5 hour retrieval",
+			MinDuration:    "90 days",
+			RetrievalTime:  "3-5 hours",
+			CostMultiplier: 0.1,
+		}
+	case StorageDeepArchive:
+		return StorageClassInfo{
+			Class:          StorageDeepArchive,
+			Name:           "Deep Archive",
+			Description:    "Long-term archive with 12 hour retrieval",
+			MinDuration:    "180 days",
+			RetrievalTime:  "12 hours",
+			CostMultiplier: 0.04,
+		}
+	default:
+		return StorageClassInfo{
+			Class:          StorageStandard,
+			Name:           "Standard",
+			Description:    "Default storage class",
+			MinDuration:    "None",
+			RetrievalTime:  "Instant",
+			CostMultiplier: 1.0,
+		}
+	}
+}
+
+// AllStorageClasses returns all available storage classes
+func AllStorageClasses() []StorageClass {
+	return []StorageClass{
+		StorageStandard,
+		StorageStandardIA,
+		StorageIntelligentTiering,
+		StorageGlacierInstant,
+		StorageGlacier,
+		StorageDeepArchive,
+	}
+}
 
 // UploadOptions configures upload behavior
 type UploadOptions struct {
