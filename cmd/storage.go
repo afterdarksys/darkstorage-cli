@@ -1,16 +1,48 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/darkstorage/cli/internal/config"
+	"github.com/darkstorage/cli/internal/storage"
 	"github.com/dustin/go-humanize"
 	"github.com/fatih/color"
 	"github.com/olekukonko/tablewriter"
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
+
+var storageBackend storage.StorageBackend
+
+// initStorage initializes the storage backend
+func initStorage() error {
+	if storageBackend != nil {
+		return nil
+	}
+
+	cfg, err := config.LoadStorageConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load storage config: %w", err)
+	}
+
+	backend, err := storage.NewTraditionalBackend(&storage.TraditionalConfig{
+		Endpoint:  cfg.Endpoint,
+		AccessKey: cfg.AccessKey,
+		SecretKey: cfg.SecretKey,
+		UseSSL:    cfg.UseSSL,
+		Region:    cfg.Region,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create storage backend: %w", err)
+	}
+
+	storageBackend = backend
+	return nil
+}
 
 // ls command
 var lsCmd = &cobra.Command{
@@ -20,44 +52,120 @@ var lsCmd = &cobra.Command{
 
 Examples:
   darkstorage ls                    # List all buckets
-  darkstorage ls my-bucket          # List files in bucket
-  darkstorage ls my-bucket/folder/  # List files in folder`,
+  darkstorage ls test-bucket          # List files in bucket
+  darkstorage ls test-bucket/folder/  # List files in folder`,
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := initStorage(); err != nil {
+			color.Red("Error: %v", err)
+			os.Exit(1)
+		}
+
+		ctx := context.Background()
 		recursive, _ := cmd.Flags().GetBool("recursive")
 		long, _ := cmd.Flags().GetBool("long")
 
 		if len(args) == 0 {
 			// List buckets
+			buckets, err := storageBackend.ListBuckets(ctx)
+			if err != nil {
+				color.Red("Error listing buckets: %v", err)
+				os.Exit(1)
+			}
+
+			if len(buckets) == 0 {
+				fmt.Println("No buckets found.")
+				fmt.Println("\nCreate a bucket with: darkstorage mb <bucket-name>")
+				return
+			}
+
 			fmt.Println("Buckets:")
 			table := tablewriter.NewWriter(os.Stdout)
-			table.SetHeader([]string{"Name", "Objects", "Size", "Created"})
+			table.SetHeader([]string{"Name", "Created"})
 			table.SetBorder(false)
-			table.Append([]string{"my-bucket", "1,234", "2.4 GB", "2024-01-01"})
-			table.Append([]string{"backups", "45", "12.8 GB", "2023-12-15"})
-			table.Append([]string{"assets", "892", "890 MB", "2023-11-20"})
+
+			for _, bucket := range buckets {
+				table.Append([]string{
+					bucket.Name,
+					bucket.CreatedAt.Format("2006-01-02"),
+				})
+			}
 			table.Render()
 			return
 		}
 
+		// List files in bucket/path
 		path := args[0]
-		bucket := strings.Split(path, "/")[0]
+
+		opts := &storage.ListOptions{
+			Recursive: recursive,
+		}
+
+		files, err := storageBackend.List(ctx, path, opts)
+		if err != nil {
+			color.Red("Error listing files: %v", err)
+			os.Exit(1)
+		}
+
+		if len(files) == 0 {
+			fmt.Printf("No files found in %s\n", path)
+			return
+		}
 
 		if long {
 			fmt.Printf("Contents of %s:\n", path)
 			table := tablewriter.NewWriter(os.Stdout)
 			table.SetHeader([]string{"Name", "Size", "Modified", "Type"})
 			table.SetBorder(false)
-			table.Append([]string{"backups/", "-", "2024-01-05", "folder"})
-			table.Append([]string{"assets/", "-", "2024-01-04", "folder"})
-			table.Append([]string{"config.json", "4 KB", "2024-01-03", "file"})
-			table.Append([]string{"readme.md", "2 KB", "2024-01-02", "file"})
+
+			for _, file := range files {
+				fileType := "file"
+				size := humanize.Bytes(uint64(file.Size))
+				if file.IsDir {
+					fileType = "folder"
+					size = "-"
+				}
+
+				table.Append([]string{
+					file.Name,
+					size,
+					file.ModifiedAt.Format("2006-01-02 15:04"),
+					fileType,
+				})
+			}
 			table.Render()
 		} else {
-			fmt.Printf("backups/  assets/  config.json  readme.md\n")
+			for _, file := range files {
+				if file.IsDir {
+					fmt.Printf("%s/  ", file.Name)
+				} else {
+					fmt.Printf("%s  ", file.Name)
+				}
+			}
+			fmt.Println()
+		}
+	},
+}
+
+// mb command (make bucket)
+var mbCmd = &cobra.Command{
+	Use:   "mb <bucket-name>",
+	Short: "Create a new bucket",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := initStorage(); err != nil {
+			color.Red("Error: %v", err)
+			os.Exit(1)
 		}
 
-		_ = bucket
-		_ = recursive
+		ctx := context.Background()
+		bucketName := args[0]
+
+		if err := storageBackend.CreateBucket(ctx, bucketName); err != nil {
+			color.Red("Error creating bucket: %v", err)
+			os.Exit(1)
+		}
+
+		color.Green("✓ Bucket created: %s", bucketName)
 	},
 }
 
@@ -68,11 +176,16 @@ var putCmd = &cobra.Command{
 	Long: `Upload files or directories to Dark Storage.
 
 Examples:
-  darkstorage put ./file.txt my-bucket/
-  darkstorage put ./folder/ my-bucket/folder/ --recursive
-  darkstorage put ./file.txt my-bucket/custom-name.txt`,
+  darkstorage put ./file.txt test-bucket/
+  darkstorage put ./folder/ test-bucket/folder/ --recursive
+  darkstorage put ./file.txt test-bucket/custom-name.txt`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := initStorage(); err != nil {
+			color.Red("Error: %v", err)
+			os.Exit(1)
+		}
+
 		source := args[0]
 		dest := args[1]
 		recursive, _ := cmd.Flags().GetBool("recursive")
@@ -88,9 +201,52 @@ Examples:
 			os.Exit(1)
 		}
 
-		// Simulate upload
-		fmt.Printf("Uploading %s to %s...\n", source, dest)
-		color.Green("✓ Upload complete: %s (%s)", filepath.Base(source), humanize.Bytes(uint64(info.Size())))
+		if info.IsDir() {
+			// TODO: Implement recursive directory upload
+			color.Yellow("Recursive upload not yet implemented")
+			os.Exit(1)
+		}
+
+		// Upload single file
+		ctx := context.Background()
+
+		file, err := os.Open(source)
+		if err != nil {
+			color.Red("Error opening file: %v", err)
+			os.Exit(1)
+		}
+		defer file.Close()
+
+		// Ensure destination has proper format (bucket/path)
+		if !strings.Contains(dest, "/") {
+			dest = dest + "/" + filepath.Base(source)
+		} else if strings.HasSuffix(dest, "/") {
+			dest = dest + filepath.Base(source)
+		}
+
+		// Progress bar
+		bar := progressbar.DefaultBytes(
+			info.Size(),
+			"Uploading",
+		)
+
+		opts := &storage.UploadOptions{
+			ProgressFunc: func(bytes int64) {
+				bar.Set64(bytes)
+			},
+		}
+
+		result, err := storageBackend.Upload(ctx, file, dest, opts)
+		if err != nil {
+			fmt.Println() // New line after progress bar
+			color.Red("Error uploading file: %v", err)
+			os.Exit(1)
+		}
+
+		fmt.Println() // New line after progress bar
+		color.Green("✓ Upload complete: %s (%s)", filepath.Base(source), humanize.Bytes(uint64(result.Size)))
+		fmt.Printf("  Location: %s\n", dest)
+		fmt.Printf("  ETag: %s\n", result.ETag)
 	},
 }
 
@@ -101,18 +257,66 @@ var getCmd = &cobra.Command{
 	Long: `Download files from Dark Storage.
 
 Examples:
-  darkstorage get my-bucket/file.txt ./
-  darkstorage get my-bucket/folder/ ./ --recursive`,
+  darkstorage get test-bucket/file.txt ./
+  darkstorage get test-bucket/folder/ ./ --recursive`,
 	Args: cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := initStorage(); err != nil {
+			color.Red("Error: %v", err)
+			os.Exit(1)
+		}
+
 		source := args[0]
 		dest := "."
 		if len(args) > 1 {
 			dest = args[1]
 		}
 
-		fmt.Printf("Downloading %s to %s...\n", source, dest)
-		color.Green("✓ Download complete: %s", filepath.Base(source))
+		ctx := context.Background()
+
+		// Get file info first
+		stat, err := storageBackend.Stat(ctx, source)
+		if err != nil {
+			color.Red("Error: %v", err)
+			os.Exit(1)
+		}
+
+		// Determine output filename
+		outputPath := dest
+		if info, err := os.Stat(dest); err == nil && info.IsDir() {
+			outputPath = filepath.Join(dest, filepath.Base(source))
+		}
+
+		// Create output file
+		outFile, err := os.Create(outputPath)
+		if err != nil {
+			color.Red("Error creating file: %v", err)
+			os.Exit(1)
+		}
+		defer outFile.Close()
+
+		// Progress bar
+		bar := progressbar.DefaultBytes(
+			stat.Size,
+			"Downloading",
+		)
+
+		opts := &storage.DownloadOptions{
+			ProgressFunc: func(bytes int64) {
+				bar.Set64(bytes)
+			},
+		}
+
+		result, err := storageBackend.Download(ctx, source, outFile, opts)
+		if err != nil {
+			fmt.Println() // New line after progress bar
+			color.Red("Error downloading file: %v", err)
+			os.Exit(1)
+		}
+
+		fmt.Println() // New line after progress bar
+		color.Green("✓ Download complete: %s (%s)", filepath.Base(outputPath), humanize.Bytes(uint64(result.Size)))
+		fmt.Printf("  Saved to: %s\n", outputPath)
 	},
 }
 
@@ -123,36 +327,52 @@ var rmCmd = &cobra.Command{
 	Long: `Remove files or empty buckets.
 
 Examples:
-  darkstorage rm my-bucket/file.txt
-  darkstorage rm my-bucket/folder/ --recursive
-  darkstorage rm my-bucket --force  # Delete bucket and contents`,
+  darkstorage rm test-bucket/file.txt
+  darkstorage rm test-bucket/folder/ --recursive
+  darkstorage rm test-bucket --force  # Delete bucket`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := initStorage(); err != nil {
+			color.Red("Error: %v", err)
+			os.Exit(1)
+		}
+
 		path := args[0]
 		force, _ := cmd.Flags().GetBool("force")
 		recursive, _ := cmd.Flags().GetBool("recursive")
 
-		if force {
-			fmt.Printf("Deleting %s and all contents...\n", path)
-		} else if recursive {
-			fmt.Printf("Deleting %s recursively...\n", path)
-		} else {
-			fmt.Printf("Deleting %s...\n", path)
+		ctx := context.Background()
+
+		// Check if it's a bucket (no /)
+		if !strings.Contains(path, "/") {
+			// Delete bucket
+			if !force {
+				color.Yellow("Use --force to delete bucket: %s", path)
+				os.Exit(1)
+			}
+
+			if err := storageBackend.DeleteBucket(ctx, path); err != nil {
+				color.Red("Error deleting bucket: %v", err)
+				os.Exit(1)
+			}
+
+			color.Green("✓ Bucket deleted: %s", path)
+			return
+		}
+
+		// Delete file
+		if recursive {
+			// TODO: Implement recursive delete
+			color.Yellow("Recursive delete not yet implemented")
+			os.Exit(1)
+		}
+
+		if err := storageBackend.Delete(ctx, path); err != nil {
+			color.Red("Error deleting file: %v", err)
+			os.Exit(1)
 		}
 
 		color.Green("✓ Deleted: %s", path)
-	},
-}
-
-// cat command
-var catCmd = &cobra.Command{
-	Use:   "cat <path>",
-	Short: "Display file contents",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		path := args[0]
-		fmt.Printf("Contents of %s:\n", path)
-		fmt.Println("{ \"example\": \"file content\" }")
 	},
 }
 
@@ -162,10 +382,22 @@ var cpCmd = &cobra.Command{
 	Short: "Copy files between locations",
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := initStorage(); err != nil {
+			color.Red("Error: %v", err)
+			os.Exit(1)
+		}
+
 		source := args[0]
 		dest := args[1]
-		fmt.Printf("Copying %s to %s...\n", source, dest)
-		color.Green("✓ Copied successfully")
+
+		ctx := context.Background()
+
+		if err := storageBackend.Copy(ctx, source, dest); err != nil {
+			color.Red("Error copying file: %v", err)
+			os.Exit(1)
+		}
+
+		color.Green("✓ Copied: %s → %s", source, dest)
 	},
 }
 
@@ -175,119 +407,59 @@ var mvCmd = &cobra.Command{
 	Short: "Move/rename files",
 	Args:  cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		source := args[0]
-		dest := args[1]
-		fmt.Printf("Moving %s to %s...\n", source, dest)
-		color.Green("✓ Moved successfully")
-	},
-}
-
-// search command
-var searchCmd = &cobra.Command{
-	Use:   "search <query>",
-	Short: "Search for files",
-	Long: `Search for files by name, metadata, or content type.
-
-Examples:
-  darkstorage search "backup"
-  darkstorage search --type image/png
-  darkstorage search --metadata key=value`,
-	Args: cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		query := strings.Join(args, " ")
-		fmt.Printf("Searching for: %s\n\n", query)
-
-		table := tablewriter.NewWriter(os.Stdout)
-		table.SetHeader([]string{"File", "Bucket", "Size", "Modified"})
-		table.SetBorder(false)
-		table.Append([]string{"backup-2024.tar.gz", "backups", "1.2 GB", "2024-01-05"})
-		table.Append([]string{"backup-2023.tar.gz", "backups", "980 MB", "2023-12-31"})
-		table.Render()
-	},
-}
-
-// hashsearch command
-var hashSearchCmd = &cobra.Command{
-	Use:   "hashsearch <hash>",
-	Short: "Search files by hash",
-	Long: `Search for files by their SHA-256 hash.
-
-Examples:
-  darkstorage hashsearch abc123def456...`,
-	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		hash := args[0]
-		fmt.Printf("Searching for hash: %s\n\n", hash[:16]+"...")
-
-		table := tablewriter.NewWriter(os.Stdout)
-		table.SetHeader([]string{"File", "Bucket", "Size"})
-		table.SetBorder(false)
-		table.Append([]string{"document.pdf", "my-bucket", "2.4 MB"})
-		table.Render()
-	},
-}
-
-// metadata command
-var metadataCmd = &cobra.Command{
-	Use:   "metadata <path>",
-	Short: "View or set file metadata",
-	Long: `View or modify file metadata.
-
-Examples:
-  darkstorage metadata my-bucket/file.txt
-  darkstorage metadata my-bucket/file.txt --set key=value`,
-	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		path := args[0]
-		set, _ := cmd.Flags().GetStringArray("set")
-
-		if len(set) > 0 {
-			for _, kv := range set {
-				fmt.Printf("Setting metadata: %s\n", kv)
-			}
-			color.Green("✓ Metadata updated")
-			return
+		if err := initStorage(); err != nil {
+			color.Red("Error: %v", err)
+			os.Exit(1)
 		}
 
-		fmt.Printf("Metadata for %s:\n", path)
-		table := tablewriter.NewWriter(os.Stdout)
-		table.SetHeader([]string{"Key", "Value"})
-		table.SetBorder(false)
-		table.Append([]string{"Content-Type", "text/plain"})
-		table.Append([]string{"Size", "4 KB"})
-		table.Append([]string{"ETag", "abc123def456"})
-		table.Append([]string{"Last-Modified", "2024-01-05T10:30:00Z"})
-		table.Append([]string{"custom-tag", "important"})
-		table.Render()
+		source := args[0]
+		dest := args[1]
+
+		ctx := context.Background()
+
+		if err := storageBackend.Move(ctx, source, dest); err != nil {
+			color.Red("Error moving file: %v", err)
+			os.Exit(1)
+		}
+
+		color.Green("✓ Moved: %s → %s", source, dest)
 	},
 }
 
-// attrs command
-var attrsCmd = &cobra.Command{
-	Use:   "attrs <path>",
-	Short: "View or set file attributes",
+// cat command
+var catCmd = &cobra.Command{
+	Use:   "cat <path>",
+	Short: "Display file contents",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := initStorage(); err != nil {
+			color.Red("Error: %v", err)
+			os.Exit(1)
+		}
+
 		path := args[0]
-		fmt.Printf("Attributes for %s:\n", path)
-		fmt.Println("  read-only: false")
-		fmt.Println("  hidden: false")
-		fmt.Println("  immutable: false")
+		ctx := context.Background()
+
+		// Download to stdout
+		result, err := storageBackend.Download(ctx, path, os.Stdout, nil)
+		if err != nil {
+			color.Red("Error reading file: %v", err)
+			os.Exit(1)
+		}
+
+		_ = result
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(lsCmd)
+	rootCmd.AddCommand(mbCmd)
 	rootCmd.AddCommand(putCmd)
 	rootCmd.AddCommand(getCmd)
 	rootCmd.AddCommand(rmCmd)
-	rootCmd.AddCommand(catCmd)
 	rootCmd.AddCommand(cpCmd)
 	rootCmd.AddCommand(mvCmd)
-	rootCmd.AddCommand(searchCmd)
-	rootCmd.AddCommand(hashSearchCmd)
-	rootCmd.AddCommand(metadataCmd)
-	rootCmd.AddCommand(attrsCmd)
+	rootCmd.AddCommand(catCmd)
 
 	// ls flags
 	lsCmd.Flags().BoolP("recursive", "r", false, "list recursively")
@@ -303,11 +475,4 @@ func init() {
 	// rm flags
 	rmCmd.Flags().BoolP("recursive", "r", false, "delete recursively")
 	rmCmd.Flags().BoolP("force", "f", false, "force delete (buckets)")
-
-	// metadata flags
-	metadataCmd.Flags().StringArray("set", nil, "set metadata key=value")
-
-	// search flags
-	searchCmd.Flags().String("type", "", "filter by content type")
-	searchCmd.Flags().StringArray("metadata", nil, "filter by metadata key=value")
 }
