@@ -27,38 +27,55 @@ Secure, distributed cloud storage with S3 compatibility, Web3 integration, and d
 
 ## 🚀 Quick Install
 
-### macOS / Linux
+### From Source (Simplest - Works Everywhere!)
 
 ```bash
-curl -fsSL https://install.darkstorage.io | sh
+# Clone the repo
+git clone https://github.com/afterdarksys/darkstorage-cli.git
+cd darkstorage-cli
+
+# Install it!
+./install.sh
+
+# Or with Python
+python3 install.py
 ```
 
-### Homebrew
-
+**Options:**
 ```bash
+./install.sh --fresh     # Clean build
+./install.sh --update    # Update and rebuild
+./install.sh --dev       # Debug build
+python3 install.py --help
+```
+
+### Package Managers
+
+**macOS/Linux:**
+```bash
+# Homebrew
 brew install afterdarksys/tap/darkstorage
+
+# Universal installer
+curl -fsSL https://install.darkstorage.io | sh
+
+# Go
+go install github.com/darkstorage/cli@latest
 ```
 
-### Windows (PowerShell)
-
+**Windows:**
 ```powershell
+# Scoop
 scoop bucket add afterdarksys https://github.com/afterdarksys/scoop-bucket
 scoop install darkstorage
 ```
 
-### Go Install
-
-```bash
-go install github.com/darkstorage/cli@latest
-```
-
-### Docker
-
+**Docker:**
 ```bash
 docker pull darkstorage/cli:latest
 ```
 
-**[📖 Full Installation Guide](INSTALLATION.md)** - All platforms, package managers, and manual installation
+**[📖 Full Installation Guide](INSTALLATION.md)** - All platforms, package managers, and options
 
 ## Quick Start
 
